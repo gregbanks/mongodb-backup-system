@@ -317,6 +317,53 @@ class BackupSystem(Thread):
             update_backup(backup, properties="state",
                           event_name=EVENT_STATE_CHANGE,
                           message="Backup is past due. Canceling...")
+    
+    ###########################################################################
+    def _get_backups_query(self, state, tags=None):
+        """
+        Generate backups query on state(s) and tags
+        """
+        q = {"state": {"$in": state} if isinstance(state, list) else state}
+
+        if tags:
+            tag_filters = []
+            for name,value in tags.items():
+                tag_prop_path = "tags.%s" % name
+                tag_filters.append({tag_prop_path: value})
+
+            q["$or"] = tag_filters
+        else:
+            q["$or"]= [
+                    {"tags" : {"$exists": False}},
+                    {"tags" : {}},
+                    {"tags" : None}
+            ]
+
+        return q
+
+    ###########################################################################
+    def cancel_backups(self, tags=None):
+        q = self._get_backups_query([STATE_SCHEDULED, STATE_FAILED], tags)
+
+        for backup in self._backup_collection.find(q):
+            self.cancel_backup(backup)
+
+    ###########################################################################
+    def cancel_backup(self, backup):
+        if backup.state not in [STATE_SCHEDULED, STATE_FAILED]:
+            msg = ("Cannot cancel backup ('%s', '%s'). Canceling is "
+                   "only allowed for backups whose state is in '%s'." %
+                   (backup.id, backup.state, str([STATE_SCHEDULED,
+                                                  STATE_FAILED])))
+            raise BackupSystemError(msg)
+
+        self.info("Canceling backup %s" % backup._id)
+        backup.state = STATE_CANCELED
+
+        update_backup(backup, properties=["state"],
+                      event_name=EVENT_STATE_CHANGE,
+                      message="Canceling")
+
 
     ###########################################################################
     def _reschedule_in_cycle_failed_backups(self):

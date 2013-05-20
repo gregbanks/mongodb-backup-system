@@ -322,6 +322,34 @@ def reschedule_all_backups(parsed_args):
         print "%s" % e
         exit(1)
 
+###############################################################################
+def cancel_backup(parsed_args):
+
+    try:
+        backup_id = parsed_args.backupId
+        bc = get_mbs().backup_collection
+        backup = bc.find_one({"_id": ObjectId(backup_id)})
+
+        if backup:
+           get_mbs().backup_system.cancel_backup(backup)
+        else:
+            print "No such backup '%s'" % backup_id
+            exit(1)
+    except Exception, e:
+        print "%s" % e
+        exit(1)
+
+###############################################################################
+def cancel_backups(parsed_args):
+
+    try:
+        tags = None
+        if parsed_args.backupTags is not None:
+            tags = dict(parsed_args.backupTags)
+        get_mbs().backup_system.cancel_backups(tags)
+    except Exception, e:
+        print "%s" % e
+        exit(1)
 
 ###############################################################################
 def schedule_plan_backup(parsed_args):
@@ -596,7 +624,43 @@ PARSER_DEF = {
                 }
 
             ],
-            "function": reschedule_all_backups,
+            "function": reschedule_all_backups
+        },
+            
+            {
+            "prog": "cancel-backup",
+            "shortDescription" : "Cancels specified backup",
+            "description" : "Cancels specified backup. "
+                            "Only applicable to failed and scheduled backups",
+            "args": [
+                    {
+                    "name": "backupId",
+                    "type" : "positional",
+                    "nargs": 1,
+                    "displayName": "BACKUP_ID",
+                    "help": "Backup id"
+                }
+            ],
+            "function": cancel_backup
+        },
+
+            {
+            "prog": "cancel-backups",
+            "shortDescription" : "Cancels multiple backups",
+            "description" : "Cancels multiple backups, optionally filtering "
+                            "by tag",
+            "args": [
+                    {
+                    "name": "backupTags",
+                    "type" : "optional",
+                    "cmd_arg":  ["--tag"],
+                    "nargs": 2,
+                    "help": "filter on tag (can be specified multiple times)",
+                    "displayName": ("TAG", "VALUE"),
+                    "action": "append"
+                }
+            ],
+            "function": cancel_backups,
         },
 
             {
