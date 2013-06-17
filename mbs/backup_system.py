@@ -286,7 +286,6 @@ class BackupSystem(Thread):
         Reschedule failed reschedulable backups that failed at least
         RESCHEDULE_PERIOD seconds ago
         """
-        now = date_now()
 
         # select backups whose last log date is at least RESCHEDULE_PERIOD ago
 
@@ -430,21 +429,26 @@ class BackupSystem(Thread):
         return False
 
     ###########################################################################
-    def schedule_backup_restore(self, backup_id, destination_uri):
+    def schedule_backup_restore(self, backup_id, destination_uri,
+                                tags=None,
+                                source_database_name=None):
         backup = get_mbs().backup_collection.get_by_id(backup_id)
         destination = build_backup_source(destination_uri)
         logger.info("Scheduling a restore for backup '%s'" % backup.id)
         restore = Restore()
 
         restore.source_backup = backup
+        restore.source_database_name = source_database_name
         restore.strategy = backup.strategy
         restore.destination = destination
-        restore.tags = restore.source_backup.tags
+        restore.tags = tags or restore.source_backup.tags
         restore.state = STATE_SCHEDULED
         restore.created_date = date_now()
 
         logger.info("Saving restore task: %s" % restore)
-        get_mbs().restore_collection.save_document(restore.to_document())
+        restore_doc = restore.to_document()
+        get_mbs().restore_collection.save_document(restore_doc)
+        restore.id = restore_doc["_id"]
         return restore
 
     ###########################################################################
@@ -507,7 +511,7 @@ class BackupSystem(Thread):
 
 
         where = ("(Math.min(%s, (this.plan.schedule.frequencyInSeconds / 2) * 1000) + "
-                    "this.logs[0].date.getTime()) < new Date().getTime()" %
+                    "this.createdDate.getTime()) < new Date().getTime()" %
                  (MAX_BACKUP_WAIT_TIME * 1000))
         one_off_starve_date = date_minus_seconds(date_now(),
                                                  ONE_OFF_BACKUP_MAX_WAIT_TIME)
@@ -525,7 +529,7 @@ class BackupSystem(Thread):
                 {
                     "$and":[
                             {"plan": {"$exists": False}},
-                            {"logs.0.date": {"$lt": one_off_starve_date}}
+                            {"createdDate": {"$lt": one_off_starve_date}}
                     ]
                  }
             ]

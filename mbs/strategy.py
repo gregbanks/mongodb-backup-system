@@ -190,7 +190,8 @@ class BackupStrategy(MBSObject):
 
         # compute max lag
         if backup.plan:
-            max_lag_seconds = int(backup.plan.schedule.frequency_in_seconds / 2)
+            max_lag_seconds = backup.plan.schedule.max_acceptable_lag(
+                                    backup.plan_occurrence)
         else:
             # One Off backup : no max lag!
             max_lag_seconds = 0
@@ -340,6 +341,7 @@ class BackupStrategy(MBSObject):
     def run_restore(self, restore):
         try:
             self._do_run_restore(restore)
+            self._compute_restore_destination_stats(restore)
         except Exception, e:
             # set reschedulable
             restore.reschedulable = _is_task_reschedulable(restore, e)
@@ -369,6 +371,14 @@ class BackupStrategy(MBSObject):
                 logger.error("workspace dir %s does not exist!" % workspace)
         except Exception, e:
             logger.error("Cleanup error for task '%s': %s" % (restore.id, e))
+
+    ###########################################################################
+    def _compute_restore_destination_stats(self, restore):
+        logger.info("Computing destination stats for restore '%s'" %
+                    restore.id)
+        dest_connector = build_mongo_connector(restore.destination.uri)
+        restore.destination_stats = dest_connector.get_stats()
+        update_restore(restore, properties=["destinationStats"])
 
     ###########################################################################
     # Helpers
@@ -747,7 +757,7 @@ class DumpStrategy(BackupStrategy):
             ])
 
         dump_cmd_display= dump_cmd[:]
-        # if the source uri is a mongo uri then mask it
+        # mask mongo uri
         dump_cmd_display[dump_cmd_display.index("dump") + 1] = \
             uri_wrapper.masked_uri
         logger.info("Running dump command: %s" % " ".join(dump_cmd_display))
@@ -858,7 +868,8 @@ class DumpStrategy(BackupStrategy):
 
     ###########################################################################
     def _get_dump_log_path(self, backup):
-        return os.path.join(backup.workspace, _log_file_name(backup))
+        dump_dir = self._get_backup_dump_dir(backup)
+        return os.path.join(backup.workspace, dump_dir, _log_file_name(backup))
 
     ###########################################################################
     def _get_tar_file_path(self, backup):
@@ -878,10 +889,6 @@ class DumpStrategy(BackupStrategy):
     def _do_run_restore(self, restore):
 
         logger.info("Running dump restore '%s'" % restore.id)
-
-        backup = restore.source_backup
-        working_dir = restore.workspace
-        file_reference = backup.target_reference
 
         # download source backup tar
         if not restore.is_event_logged("END_DOWNLOAD_BACKUP"):
@@ -945,7 +952,9 @@ class DumpStrategy(BackupStrategy):
 
     ###########################################################################
     def _restore_dump(self, restore):
+        working_dir = restore.workspace
         file_reference = restore.source_backup.target_reference
+
         logger.info("Extracting tar file '%s'" % file_reference.file_name)
 
         update_restore(restore, event_name="START_RESTORE_DUMP",
@@ -954,23 +963,47 @@ class DumpStrategy(BackupStrategy):
         # run mongoctl restore
         logger.info("Restoring using mongoctl restore")
         restore_source_path = file_reference.file_name[: -4]
+        restore_source_path = os.path.join(working_dir, restore_source_path)
+
         dest_uri = restore.destination.uri
-        uri_wrapper = mongo_uri_tools.parse_mongo_uri(dest_uri)
-        if uri_wrapper.database:
-            restore_source_path += uri_wrapper.database
+        dest_uri_wrapper = mongo_uri_tools.parse_mongo_uri(dest_uri)
+
+        src_uri = restore.source_backup.source.uri
+        src_uri_wrapper = mongo_uri_tools.parse_mongo_uri(src_uri)
+
+        source_database_name = restore.source_database_name
+        if not source_database_name:
+            source_database_name = src_uri_wrapper.database
+
+        # map source/dest
+        if source_database_name:
+            restore_source_path = os.path.join(restore_source_path,
+                                               source_database_name)
+            if not dest_uri_wrapper.database:
+                if not dest_uri.endswith("/"):
+                    dest_uri += "/"
+                dest_uri += source_database_name
 
         restore_cmd = [
             which("mongoctl"),
             "restore",
-            restore.destination.uri,
+            dest_uri,
             restore_source_path
         ]
 
-        logger.info("Running mongoctl restore command: %s" % restore_cmd)
+        restore_cmd_display = restore_cmd[:]
+
+        restore_cmd_display[restore_cmd_display.index("restore") + 1] =\
+            dest_uri_wrapper.masked_uri
+
+
+        logger.info("Running mongoctl restore command: %s" %
+                    " ".join(restore_cmd_display))
         # execute dump command
         restore_log_path = self._get_restore_log_path(restore)
         returncode = execute_command_wrapper(restore_cmd,
-            output_path=restore_log_path
+            output_path=restore_log_path,
+            cwd=working_dir
         )
 
         # read the last dump log line
@@ -978,7 +1011,7 @@ class DumpStrategy(BackupStrategy):
         last_log_line = execute_command(last_line_tail_cmd)
 
         if returncode:
-            raise RestoreError(restore_cmd, returncode, last_log_line)
+            raise RestoreError(restore_cmd_display, returncode, last_log_line)
 
         update_restore(restore, event_name="END_RESTORE_DUMP",
                        message="Restoring dump completed!")
