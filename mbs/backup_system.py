@@ -26,8 +26,6 @@ from backup import Backup
 from restore import Restore
 from target import CloudBlockStorageSnapshotReference
 
-from source import MongoSource
-
 ###############################################################################
 ########################                                #######################
 ########################           Backup System        #######################
@@ -309,7 +307,10 @@ class BackupSystem(Thread):
         }
 
         for backup in get_mbs().backup_collection.find(q):
-            self.reschedule_backup(backup, from_scratch=from_scratch)
+            try:
+                self.reschedule_backup(backup, from_scratch=from_scratch)
+            except Exception, e:
+                logger.error(e)
 
     ###########################################################################
     def reschedule_backup(self, backup, from_scratch=False):
@@ -744,7 +745,9 @@ class BackupSystemCommandServer(Thread):
             logger.info("Command Server: Received a stop command")
             try:
                 backup_system._do_stop()
-                return "BackupSystem stopped successfully"
+                return document_pretty_string({
+                    "ok": True
+                })
             except Exception, e:
                 return "Error while trying to stop backup system: %s" % e
 
@@ -769,16 +772,19 @@ class BackupSystemCommandServer(Thread):
                         (backup_id, e))
 
         ########## build restore method
-        @flask_server.route('/restore-backup', methods=['GET'])
+        @flask_server.route('/restore-backup', methods=['POST'])
         def restore_backup():
-            backup_id = request.args.get('backupId')
-            destination_uri = request.args.get('destinationUri')
-
+            arg_json = request.json
+            backup_id = arg_json.get('backupId')
+            destination_uri = arg_json.get('destinationUri')
+            source_database_name = arg_json.get('sourceDatabaseName')
             logger.info("Command Server: Received a restore-backup command")
             try:
-                result = backup_system.schedule_backup_restore(backup_id,
-                                                               destination_uri)
-                return str(result)
+                r = backup_system.schedule_backup_restore(backup_id,
+                                                          destination_uri,
+                                                          source_database_name=
+                                                          source_database_name)
+                return str(r)
             except Exception, e:
                 return ("Error while trying to restore backup %s: %s" %
                         (backup_id, e))
@@ -825,7 +831,7 @@ class BackupSystemCommandServer(Thread):
 
         except Exception, e:
             raise BackupSystemError("Error while stopping flask server:"
-                                        " %s" %e)
+                                    " %s" %e)
 
 
 
@@ -884,4 +890,4 @@ def build_backup_source(uri):
     """
         Builds a backup source of the specified URI
     """
-    return MongoSource(uri)
+    return get_mbs().backup_source_builder.build_backup_source(uri)

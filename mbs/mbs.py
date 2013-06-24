@@ -5,8 +5,7 @@ import os
 import mbs_config as config
 import mbs_logging
 
-from makerpy.object_collection import ObjectCollection
-from task_collection import MBSTaskCollection
+from collection import MBSObjectCollection, MBSTaskCollection
 from makerpy.maker import resolve_class, Maker
 
 from type_bindings import TYPE_BINDINGS
@@ -64,6 +63,9 @@ class MBS(object):
 
         # init the encryptor
         self._encryptor = self._get_encryptor()
+
+        #
+        self._backup_source_builder = None
 
     ###########################################################################
     def _get_type_bindings(self):
@@ -130,8 +132,8 @@ class MBS(object):
     def plan_collection(self):
 
         if not self._plan_collection:
-            pc = ObjectCollection(self.database["plans"], clazz=BackupPlan,
-                                  type_bindings=self._type_bindings)
+            pc = MBSObjectCollection(self.database["plans"], clazz=BackupPlan,
+                                     type_bindings=self._type_bindings)
             self._plan_collection = pc
 
         return self._plan_collection
@@ -140,8 +142,8 @@ class MBS(object):
     @property
     def audit_collection(self):
         if not self._audit_collection:
-            ac = ObjectCollection(self.database["audits"], clazz=AuditReport,
-                                  type_bindings=self._type_bindings)
+            ac = MBSObjectCollection(self.database["audits"], clazz=AuditReport,
+                                     type_bindings=self._type_bindings)
 
             self._audit_collection = ac
 
@@ -223,6 +225,17 @@ class MBS(object):
     @property
     def encryptor(self):
         return self._encryptor
+
+    ###########################################################################
+    @property
+    def backup_source_builder(self):
+
+        sb = self._backup_source_builder
+        if not sb:
+            from backup_source_builder import DefaultBackupSourceBuilder
+            sb = DefaultBackupSourceBuilder()
+            self._backup_source_builder = sb
+        return sb
 
     ###########################################################################
     @property

@@ -214,12 +214,10 @@ class EbsVolumeStorage(CloudBlockStorage):
 
         logger.info("Creating EBS snapshot for volume '%s'" % self.volume_id)
 
-        if not ebs_volume.create_snapshot(description):
+        ebs_snapshot = ebs_volume.create_snapshot(description)
+        if not ebs_snapshot:
             raise BlockStorageSnapshotError("Failed to create snapshot from "
                                             "backup source :\n%s" % self)
-
-        # get the snapshot id and put it as a target reference
-        ebs_snapshot = self._get_ebs_snapshot_by_desc(description)
 
         # add name tag
         ebs_snapshot.add_tag("Name", name)
@@ -253,9 +251,12 @@ class EbsVolumeStorage(CloudBlockStorage):
             Detects changes in snapshot
         """
         ebs_snapshot = self._get_ebs_snapshot_by_id(ebs_ref.snapshot_id)
-        new_ebs_ref = self._new_ebs_snapshot_reference(ebs_snapshot)
-        if new_ebs_ref != ebs_ref:
-            return new_ebs_ref
+        # NOTE check if the above call returns a snapshot object because boto
+        # returns None although the snapshot exists (AWS api freakiness ?)
+        if ebs_snapshot:
+            new_ebs_ref = self._new_ebs_snapshot_reference(ebs_snapshot)
+            if new_ebs_ref != ebs_ref:
+                return new_ebs_ref
 
     ###########################################################################
     def _new_ebs_snapshot_reference(self, ebs_snapshot):

@@ -546,15 +546,18 @@ class DumpStrategy(BackupStrategy):
             try:
                 self.dump_backup(backup, mongo_connector,
                                  database_name=source.database_name)
+                # upload dump log file
+                self._upload_dump_log_file(backup)
             except DumpError, e:
                 # still tar and upload failed dumps
                 logger.error("Dumping backup '%s' failed. Will still tar"
                              "up and upload to keep dump logs" % backup.id)
+
+                # TODO maybe change the name of the uploaded failed dump log file
+                self._upload_dump_log_file(backup)
                 self._tar_and_upload_failed_dump(backup)
                 raise
-            finally:
-                # upload log file
-                self._upload_dump_log_file(backup)
+
 
         # tar the dump
         if not backup.is_event_logged(EVENT_END_ARCHIVE):
@@ -903,8 +906,10 @@ class DumpStrategy(BackupStrategy):
             if not restore.is_event_logged("END_RESTORE_DUMP"):
                 # restore dump
                 self._restore_dump(restore)
-        finally:
+                self._upload_restore_log_file(restore)
+        except RestoreError, e:
             self._upload_restore_log_file(restore)
+            raise
 
 
     ###########################################################################
@@ -968,12 +973,24 @@ class DumpStrategy(BackupStrategy):
         dest_uri = restore.destination.uri
         dest_uri_wrapper = mongo_uri_tools.parse_mongo_uri(dest_uri)
 
+        # append database name for destination uri if destination is a server
+        # or a cluster
+        # TODO this needs to be refactored where uri always include database
+        # and BackupSource should include more info its a server or a cluster
+        # i.e. credz are admin
+        if not dest_uri_wrapper.database and restore.destination.database_name:
+            dest_uri = "%s/%s" % (dest_uri, restore.destination.database_name)
+            dest_uri_wrapper = mongo_uri_tools.parse_mongo_uri(dest_uri)
+
         src_uri = restore.source_backup.source.uri
         src_uri_wrapper = mongo_uri_tools.parse_mongo_uri(src_uri)
 
         source_database_name = restore.source_database_name
         if not source_database_name:
-            source_database_name = src_uri_wrapper.database
+            if restore.source_backup.source.database_name:
+                source_database_name = restore.source_backup.source.database_name
+            else:
+                source_database_name = src_uri_wrapper.database
 
         # map source/dest
         if source_database_name:
